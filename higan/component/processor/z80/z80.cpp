@@ -1,10 +1,10 @@
-#include <emulator/emulator.hpp>
+#include <higan/higan.hpp>
 #include "z80.hpp"
 
 namespace higan {
 
 #include "disassembler.cpp"
-#include "registers.cpp"
+#include "registers.hpp"
 #include "memory.cpp"
 #include "instruction.cpp"
 #include "algorithms.cpp"
@@ -25,6 +25,7 @@ auto Z80::power(MOSFET mosfet) -> void {
 
 auto Z80::irq(bool maskable, uint16 pc, uint8 extbus) -> bool {
   if(maskable && !IFF1) return false;
+  wait(7);
   R.bit(0,6)++;
 
   push(PC);

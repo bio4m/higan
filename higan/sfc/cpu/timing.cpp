@@ -1,10 +1,10 @@
 //DMA clock divider
-auto CPU::dmaCounter() const -> uint {
+inline auto CPU::dmaCounter() const -> uint {
   return counter.cpu & 7;
 }
 
 //joypad auto-poll clock divider
-auto CPU::joypadCounter() const -> uint {
+inline auto CPU::joypadCounter() const -> uint {
   return counter.cpu & 255;
 }
 
@@ -61,6 +61,7 @@ auto CPU::scanline() -> void {
     status.hdmaSetupPosition = (io.version == 1 ? 12 + 8 - dmaCounter() : 12 + dmaCounter());
     status.hdmaSetupTriggered = 0;
 
+    status.autoJoypadLatch = 0;
     status.autoJoypadCounter = 0;
   }
 
@@ -75,7 +76,7 @@ auto CPU::scanline() -> void {
   }
 }
 
-auto CPU::aluEdge() -> void {
+alwaysinline auto CPU::aluEdge() -> void {
   if(alu.mpyctr) {
     alu.mpyctr--;
     if(io.rddiv & 1) io.rdmpy += alu.shift;
@@ -94,7 +95,7 @@ auto CPU::aluEdge() -> void {
   }
 }
 
-auto CPU::dmaEdge() -> void {
+alwaysinline auto CPU::dmaEdge() -> void {
   //H/DMA pending && DMA inactive?
   //.. Run one full CPU cycle
   //.. HDMA pending && HDMA enabled ? DMA sync + HDMA run
@@ -137,26 +138,44 @@ auto CPU::dmaEdge() -> void {
 }
 
 //called every 256 clocks; see CPU::step()
-auto CPU::joypadEdge() -> void {
-  if(vcounter() >= ppu.vdisp()) {
-    //cache enable state at first iteration
-    if(status.autoJoypadCounter == 0) status.autoJoypadLatch = io.autoJoypadPoll;
+alwaysinline auto CPU::joypadEdge() -> void {
+  // Auto-Joypad-Read begins between dots 32.5 and 95.5 of the first V-Blank scanline,
+  // and ends 4224 master cycles later. (Anomie's timing doc)
+  //
+  // We have to use dot 32.5 to 96 or sometimes the start of auto-joypad read is missed on some frames,
+  // 32 would sometimes start it to early
+  //
+  // Todo: 4224 cycles would be 33*128 and not 16*256, hardware testing shows that higan ends auto-joypad read too early
+  // Todo: What happens to auto-joypad read when you read/write 4816/4817 while it is in progress?
+
+  if(vcounter() == ppu.vdisp() && hcounter() >= 130 && hcounter() <= 384) {
+    // start auto joypad read on the first scanline of vblank
+    if(!status.autoJoypadCounter) {
+      status.autoJoypadLatch = io.autoJoypadPoll;
+
+      if(status.autoJoypadLatch) {
+        //shift registers are cleared at start of auto joypad polling
+        io.joy1 = 0;
+        io.joy2 = 0;
+        io.joy3 = 0;
+        io.joy4 = 0;
+      }
+    }
+
+    if(status.autoJoypadLatch && !status.autoJoypadCounter) {
+      controllerPort1.latch(1);
+      controllerPort2.latch(1);
+      controllerPort1.latch(0);
+      controllerPort2.latch(0);
+    }
+  }
+
+  if(!status.autoJoypadLatch) {
+    status.autoJoypadActive = 0;
+  } else {
     status.autoJoypadActive = status.autoJoypadCounter <= 15;
 
-    if(status.autoJoypadActive && status.autoJoypadLatch) {
-      if(status.autoJoypadCounter == 0) {
-        controllerPort1.latch(1);
-        controllerPort2.latch(1);
-        controllerPort1.latch(0);
-        controllerPort2.latch(0);
-
-        //shift registers are flushed at start of auto joypad polling
-        io.joy1 = ~0;
-        io.joy2 = ~0;
-        io.joy3 = ~0;
-        io.joy4 = ~0;
-      }
-
+    if(status.autoJoypadActive) {
       uint2 port0 = controllerPort1.data();
       uint2 port1 = controllerPort2.data();
 
